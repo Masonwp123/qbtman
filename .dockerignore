@@ -3,7 +3,12 @@
 .git/
 .venv/
 .idea/
+.ruff_cache/
 tests/
+dist/
+
+# Container data
+docker/
 
 # Configuration
 .env

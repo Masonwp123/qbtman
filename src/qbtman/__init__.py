@@ -1,15 +1,24 @@
-import os, re, subprocess, time
+import json, os, time, urllib.error, urllib.request
 from enum import Enum
 import qbittorrentapi
 
 # qBittorrent connection settings
-URL = os.getenv("QBT_URL", "localhost")
-PORT = int(os.getenv("QBT_PORT", "8081"))
+URL = os.getenv("QBT_URL", "http://localhost")
+PORT = int(os.getenv("QBT_PORT", "8080"))
 API_TOKEN = os.getenv("QBT_API_TOKEN")
 
-# Natpmp settings
-NATPMP_GATEWAY = os.getenv("QBT_NATPMP_GATEWAY", "10.2.0.1")
-RENEW_INTERVAL = int(os.getenv("QBT_RENEW_INTERVAL", "45"))
+# gluetun control server settings
+GLUETUN_URL = os.getenv("GLUETUN_URL", "http://localhost:8000").rstrip("/")
+GLUETUN_API_KEY = os.getenv("GLUETUN_API_KEY")
+VPN_INTERFACE = os.getenv("QBT_VPN_INTERFACE", "tun0")
+
+# Interface qBittorrent is parked on while gluetun has no forwarded port
+PARKED_INTERFACE = "lo"
+
+# How often to check gluetun and qBittorrent (in seconds)
+CHECK_INTERVAL = int(os.getenv("QBT_CHECK_INTERVAL", "60"))
+
+# Port watchdog
 FIREWALLED_THRESHOLD = int(os.getenv("QBT_FIREWALLED_THRESHOLD", "3"))
 REBIND_COOLDOWN = int(os.getenv("QBT_REBIND_COOLDOWN", "600"))
 
@@ -36,38 +45,20 @@ class ManageMethod(Enum):
 
 NO_CATEGORY_METHOD = ManageMethod.from_str(os.getenv("QBT_NO_CATEGORY_METHOD", "ignore"))
 
-def get_forwarded_port(protocol):
-    result = subprocess.run(
-        ["natpmpc", "-a", "1", "0", protocol, "60", "-g", NATPMP_GATEWAY],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    output = result.stdout + "\n" + result.stderr
 
-    print(output)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"natpmpc failed: {output}")
-
-    match = re.search(r"Mapped public port (\d+) protocol", output, re.IGNORECASE)
-    if not match:
-        raise RuntimeError(f"Could not find assigned port:\n{output}")
-
-    return int(match.group(1))
+# Get gluetun's forwarded port, 0 is down.
+def get_forwarded_port():
+    request = urllib.request.Request(f"{GLUETUN_URL}/v1/portforward")
+    if GLUETUN_API_KEY:
+        request.add_header("X-API-Key", GLUETUN_API_KEY)
+    with urllib.request.urlopen(request, timeout=10) as response:
+        data = json.load(response)
+    ports = data.get("ports") or []
+    return int(ports[0]) if ports else 0
 
 
-def get_ports():
-    udp_port = get_forwarded_port("udp")
-    tcp_port = get_forwarded_port("tcp")
-    if udp_port != tcp_port:
-        raise RuntimeError(f"UDP Port {udp_port} does not equal TCP Port {tcp_port}")
-    return udp_port
-
-
+# qBittorrent ignores setting the port it already has, so bounce the port up and back
 def rebind_port(client, port):
-    """qBittorrent ignores setting the port it already has, so bounce it
-    through a temporary value to force the listening socket to be rebuilt."""
     temp = port + 1 if port < 65535 else port - 1
     client.app.preferences = {"listen_port": temp}
     time.sleep(2)
@@ -80,31 +71,52 @@ def make_client():
     return client
 
 
-def sync_port(client, new_port, state):
-    current_port = client.app.preferences["listen_port"]
+def sync_port(client, forwarded_port, state):
+    prefs = client.app.preferences
+    current_port = prefs["listen_port"]
+    current_interface = prefs.get("current_network_interface", "")
+
+    if forwarded_port == 0:
+        # The VPN is down or reconnecting. Park qBittorrent on loopback so it is guaranteed to
+        # rebind once a port comes back, even if Proton hands out the same port again.
+        if current_interface != PARKED_INTERFACE:
+            print("gluetun has no forwarded port; parking qBittorrent on loopback.")
+            client.app.preferences = {"listen_port": 0, "current_network_interface": PARKED_INTERFACE}
+        else:
+            print("Waiting for gluetun to forward a port.")
+        state["firewalled_count"] = 0
+        return
+
+    if current_port != forwarded_port or current_interface != VPN_INTERFACE:
+        print(f"Applying forwarded port {forwarded_port} on {VPN_INTERFACE} "
+              f"(was {current_port} on {current_interface or 'any interface'}).")
+        client.app.preferences = {
+            "listen_port": forwarded_port,
+            "current_network_interface": VPN_INTERFACE,
+            "random_port": False,
+            "upnp": False,
+        }
+        state["last_rebind"] = time.monotonic()
+        state["firewalled_count"] = 0
+        return
+
     status = client.transfer.info.get("connection_status", "")
 
-    if status == "firewalled":
-        state["firewalled_count"] += 1
-    else:
-        state["firewalled_count"] = 0
+    if FIREWALLED_THRESHOLD > 0:
+        if status == "firewalled":
+            state["firewalled_count"] += 1
+        else:
+            state["firewalled_count"] = 0
 
-    if current_port != new_port:
-        print(f"Port changed {current_port} -> {new_port}, applying.")
-        client.app.preferences = {"listen_port": new_port}
-        state["last_rebind"] = time.monotonic()
-        state["firewalled_count"] = 0
-        return
+        if (state["firewalled_count"] >= FIREWALLED_THRESHOLD
+                and time.monotonic() - state["last_rebind"] > REBIND_COOLDOWN):
+            print(f"Firewalled for {state['firewalled_count']} checks on port {forwarded_port}; forcing rebind.")
+            rebind_port(client, forwarded_port)
+            state["last_rebind"] = time.monotonic()
+            state["firewalled_count"] = 0
+            return
 
-    if (state["firewalled_count"] >= FIREWALLED_THRESHOLD
-            and time.monotonic() - state["last_rebind"] > REBIND_COOLDOWN):
-        print(f"Firewalled for {state['firewalled_count']} checks on port {new_port}; forcing rebind.")
-        rebind_port(client, new_port)
-        state["last_rebind"] = time.monotonic()
-        state["firewalled_count"] = 0
-        return
-
-    print(f"Port {current_port} OK (status: {status or 'unknown'}).")
+    print(f"Port {forwarded_port} OK (status: {status or 'unknown'}).")
 
 
 def cleanup_torrents(client):
@@ -162,13 +174,21 @@ def main():
     while True:
         started = time.monotonic()
         try:
-            # Renew the mapping first, every loop, no matter what else fails.
-            new_port = get_ports()
-
             if client is None:
                 client = make_client()
 
-            sync_port(client, new_port, state)
+            # A gluetun problem shouldn't stop torrent cleanup, so handle it separately.
+            forwarded_port = None
+            try:
+                forwarded_port = get_forwarded_port()
+            except urllib.error.HTTPError as e:
+                hint = " (check GLUETUN_API_KEY)" if e.code in (401, 403) else ""
+                print(f"gluetun control server returned HTTP {e.code}{hint}.")
+            except (urllib.error.URLError, TimeoutError, ValueError) as e:
+                print(f"gluetun control server unreachable: {e}")
+
+            if forwarded_port is not None:
+                sync_port(client, forwarded_port, state)
 
             if CLEANUP_EVERY > 0 and loop % CLEANUP_EVERY == 0:
                 cleanup_torrents(client)
@@ -186,4 +206,4 @@ def main():
             print(f"Error: {e}")
 
         loop += 1
-        time.sleep(max(1, RENEW_INTERVAL - (time.monotonic() - started)))
+        time.sleep(max(1, CHECK_INTERVAL - (time.monotonic() - started)))

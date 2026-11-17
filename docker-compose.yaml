@@ -1,11 +1,55 @@
 services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.41.3
+    container_name: gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./docker/gluetun:/gluetun
+    ports:
+      # qBittorrent WebUI (qbittorrent shares gluetun's network, so its ports are published here)
+      - "8080:8080"
+    environment:
+      TZ: America/New_York
+      ## Wireguard:
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY}
+      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES}
+      VPN_DNS_ADDRESS: ${VPN_DNS_ADDRESS}
+
+      VPN_PORT_FORWARDING: "on"
+      VPN_PORT_FORWARDING_PROVIDER: protonvpn
+
+      ## Enable if using a specific server:
+      # VPN_SERVICE_PROVIDER: custom
+      # WIREGUARD_PUBLIC_KEY: ${WIREGUARD_PUBLIC_KEY}
+      # WIREGUARD_ENDPOINT_IP: ${WIREGUARD_ENDPOINT_IP}
+      # WIREGUARD_ENDPOINT_PORT: ${WIREGUARD_ENDPOINT_PORT}
+
+      ## Enable if allowing gluetun to find servers:
+      VPN_SERVICE_PROVIDER: protonvpn
+      SERVER_COUNTRIES: "United States,Canada" # What countries to find servers in
+      PORT_FORWARD_ONLY: "on" # Only use P2P servers, and let gluetun do the NAT-PMP renewal
+      ## Needed when finding servers to refresh the server list
+      UPDATER_PERIOD: 24h
+      UPDATER_PROTONVPN_EMAIL: ${PROTON_EMAIL} # Proton Username, ends with @protonmail.com
+      UPDATER_PROTONVPN_PASSWORD: ${PROTON_PASSWORD}
+
+      # Control server (port 8000, not published) requires auth; qbtman reads the forwarded port from it
+      # Generate a key with: docker run --rm qmcgaw/gluetun genkey
+      HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE: '{"auth":"apikey","apikey":"${GLUETUN_API_KEY}"}'
+
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: qbittorrent
     restart: unless-stopped
-    networks:
-      bond0-macvlan:
-        - ipv4_address: "192.168.1.150"
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
     environment:
       - PUID=1000
       - PGID=1000
@@ -14,29 +58,36 @@ services:
     volumes:
       - ./docker/config:/config
       - ./docker/downloads:/downloads
-    ports:
-      - "8080:8080"
+
   qbtman:
     image: qbtman:dev
     container_name: qbtman
     restart: unless-stopped
     build: .
     init: true
-    network_mode: "service:qbittorrent"
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_started
     environment:
-      # How to connect with qbittorrent, preferably over docker network
+      # qBittorrent is reachable on localhost since everything shares gluetun's network
       QBT_URL: http://localhost
       QBT_PORT: 8080
       QBT_API_TOKEN: ${QBT_API_TOKEN}
-      # What gateway to use natpmp with
-      QBT_NATPMP_GATEWAY: 10.2.0.1
-      # How often to renew the gateway (in seconds)
-      QBT_RENEW_INTERVAL: 45
-      # How many times qbittorrent needs to report it being firewalled before resetting it's port
+      # gluetun's control server, where the forwarded port is read from
+      GLUETUN_URL: http://localhost:8000
+      GLUETUN_API_KEY: ${GLUETUN_API_KEY}
+      # Interface qbittorrent is bound to while the VPN is up (gluetun's VPN_INTERFACE)
+      QBT_VPN_INTERFACE: tun0
+      # How often to check gluetun and qbittorrent (in seconds)
+      QBT_CHECK_INTERVAL: 60
+      # How many checks qbittorrent needs to report being firewalled before rebinding its port, 0 disables the watchdog
       QBT_FIREWALLED_THRESHOLD: 3
       # How often are we allowed to rebind the qbittorrent port (in seconds)
       QBT_REBIND_COOLDOWN: 600
-      # Do the cleanup every n loops (a loop is as long as the renew interval), 0 disables torrent management
+      # Do the cleanup every n checks, 0 disables torrent management
       QBT_CLEANUP_EVERY: 0
       # What ratio to stop/remove/delete torrents at (please be generous)
       QBT_MAX_RATIO: 2.0
@@ -48,8 +99,3 @@ services:
       QBT_DELETE_CATEGORIES: "delete0,delete1"
       # [ignore, stop, remove, delete] What action to do with torrents that have no category
       QBT_NO_CATEGORY_METHOD: "ignore"
-
-networks:
-  bond0-macvlan:
-    external: true
-    name: "bond0-macvlan"

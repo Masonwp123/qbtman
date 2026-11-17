@@ -2,31 +2,30 @@ FROM python:3.15-alpine
 
 LABEL maintainer="Mason Parker <masonparker868@gmail.com>"
 LABEL version="1.0.0"
-LABEL description="qbt with natpmpc"
+LABEL description="qBittorrent ratio manager and port watchdog"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHON_COLORS=0 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PYTHON=/usr/local/bin/python3
 
 WORKDIR /app
 
-# Add required packages
-RUN apk update && apk upgrade --no-cache && \
-    apk add --no-cache \
-    libnatpmp
+# Install locked dependencies first so this layer is cached across source changes.
+# uv is mounted only for the build step, so it doesn't end up in the final image.
+COPY pyproject.toml uv.lock ./
+RUN --mount=from=ghcr.io/astral-sh/uv:0.13.8,source=/uv,target=/bin/uv \
+    uv sync --locked --no-dev --no-install-project
 
-# Copy application files and use pip to install python dependencies from pyproject.toml
-COPY pyproject.toml ./
 COPY src ./src
-RUN pip install .
+RUN --mount=from=ghcr.io/astral-sh/uv:0.13.8,source=/uv,target=/bin/uv \
+    uv sync --locked --no-dev --no-editable
 
-# Copy entrypoint and make executable
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+ENV PATH="/app/.venv/bin:$PATH"
 
-# Ensure entrypoint's line endings are Unix
-RUN sed -i 's/\r$//g' /entrypoint.sh
+USER nobody
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["qbtman"]
