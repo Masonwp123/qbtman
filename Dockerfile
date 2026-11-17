@@ -1,7 +1,6 @@
 FROM python:3.15-alpine
 
 LABEL maintainer="Mason Parker <masonparker868@gmail.com>"
-LABEL version="1.0.0"
 LABEL description="qBittorrent ratio manager and port watchdog"
 
 ENV PYTHONUNBUFFERED=1 \

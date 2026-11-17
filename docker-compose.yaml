@@ -51,19 +51,18 @@ services:
       gluetun:
         condition: service_healthy
     environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=Etc/UTC
-      - WEBUI_PORT=8080
+      PUID: 1000
+      PGID: 1000
+      TZ: America/New_York
+      WEBUI_PORT: 8080
     volumes:
       - ./docker/config:/config
       - ./docker/downloads:/downloads
 
   qbtman:
-    image: qbtman:dev
+    image: ghcr.io/masonwp123/qbtman:latest
     container_name: qbtman
     restart: unless-stopped
-    build: .
     init: true
     network_mode: "service:gluetun"
     depends_on:
