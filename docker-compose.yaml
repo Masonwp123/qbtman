@@ -1,0 +1,55 @@
+services:
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    restart: unless-stopped
+    networks:
+      bond0-macvlan:
+        - ipv4_address: "192.168.1.150"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - WEBUI_PORT=8080
+    volumes:
+      - ./docker/config:/config
+      - ./docker/downloads:/downloads
+    ports:
+      - "8080:8080"
+  qbtman:
+    image: qbtman:dev
+    container_name: qbtman
+    restart: unless-stopped
+    build: .
+    init: true
+    network_mode: "service:qbittorrent"
+    environment:
+      # How to connect with qbittorrent, preferably over docker network
+      QBT_URL: http://localhost
+      QBT_PORT: 8080
+      QBT_API_TOKEN: ${QBT_API_TOKEN}
+      # What gateway to use natpmp with
+      QBT_NATPMP_GATEWAY: 10.2.0.1
+      # How often to renew the gateway (in seconds)
+      QBT_RENEW_INTERVAL: 45
+      # How many times qbittorrent needs to report it being firewalled before resetting it's port
+      QBT_FIREWALLED_THRESHOLD: 3
+      # How often are we allowed to rebind the qbittorrent port (in seconds)
+      QBT_REBIND_COOLDOWN: 600
+      # Do the cleanup every n loops (a loop is as long as the renew interval), 0 disables torrent management
+      QBT_CLEANUP_EVERY: 0
+      # What ratio to stop/remove/delete torrents at (please be generous)
+      QBT_MAX_RATIO: 2.0
+      # Which categories should have their torrents stopped
+      QBT_STOP_CATEGORIES: "stop0,stop1"
+      # Which categories should have their torrents removed (overrides stopped)
+      QBT_REMOVE_CATEGORIES: "remove0,remove1"
+      # Which categories should have their torrents removed and files deleted (ex: if they auto move)
+      QBT_DELETE_CATEGORIES: "delete0,delete1"
+      # [ignore, stop, remove, delete] What action to do with torrents that have no category
+      QBT_NO_CATEGORY_METHOD: "ignore"
+
+networks:
+  bond0-macvlan:
+    external: true
+    name: "bond0-macvlan"

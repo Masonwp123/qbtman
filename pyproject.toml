@@ -1,0 +1,15 @@
+[build-system]
+requires = ["uv_build >= 0.13.8, <0.14.0"]
+build-backend = "uv_build"
+
+[project]
+name = "qbtman"
+version = "1.0.0"
+description = "Allow natpmpc to interact with qBittorrent and optionally stop torrents over a certain ratio"
+requires-python = ">=3.12"
+dependencies = [
+    "qbittorrent-api>=2026.10.1",
+]
+
+[project.scripts]
+qbtman = "qbtman:main"

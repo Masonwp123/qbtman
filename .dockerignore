@@ -1,0 +1,10 @@
+# Development Files
+**/__pycache__
+.git/
+.venv/
+.idea/
+tests/
+
+# Configuration
+.env
+*.egg-info
