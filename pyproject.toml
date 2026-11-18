@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "qbtman"
-version = "1.0.1"
+version = "1.0.2"
 description = "Stop/remove qBittorrent torrents over a ratio and watch the gluetun-forwarded port"
 requires-python = ">=3.12"
 dependencies = [
