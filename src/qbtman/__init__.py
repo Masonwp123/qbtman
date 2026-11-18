@@ -6,6 +6,8 @@ import qbittorrentapi
 URL = os.getenv("QBT_URL", "http://localhost")
 PORT = int(os.getenv("QBT_PORT", "8080"))
 API_TOKEN = os.getenv("QBT_API_TOKEN")
+# Empty or the .env.example placeholder means no real token has been set yet
+HAS_API_TOKEN = bool(API_TOKEN) and API_TOKEN != "qbt_CHANGE_ME"
 
 # gluetun control server settings
 GLUETUN_URL = os.getenv("GLUETUN_URL", "http://localhost:8000").rstrip("/")
@@ -26,10 +28,6 @@ REBIND_COOLDOWN = int(os.getenv("QBT_REBIND_COOLDOWN", "600"))
 CLEANUP_EVERY = int(os.getenv("QBT_CLEANUP_EVERY", "0"))
 MAX_RATIO = float(os.getenv("QBT_MAX_RATIO", "2.0"))
 
-STOP_CATEGORIES = [c.strip() for c in os.getenv("QBT_STOP_CATEGORIES", "").split(",") if c.strip()]
-REMOVE_CATEGORIES = [c.strip() for c in os.getenv("QBT_REMOVE_CATEGORIES", "").split(",") if c.strip()]
-DELETE_CATEGORIES = [c.strip() for c in os.getenv("QBT_DELETE_CATEGORIES", "").split(",") if c.strip()]
-
 class ManageMethod(Enum):
     IGNORE = 0
     STOP = 1
@@ -44,6 +42,10 @@ class ManageMethod(Enum):
         return ManageMethod.IGNORE
 
 NO_CATEGORY_METHOD = ManageMethod.from_str(os.getenv("QBT_NO_CATEGORY_METHOD", "ignore"))
+STOP_CATEGORIES = [c.strip() for c in os.getenv("QBT_STOP_CATEGORIES", "").split(",") if c.strip()]
+REMOVE_CATEGORIES = [c.strip() for c in os.getenv("QBT_REMOVE_CATEGORIES", "").split(",") if c.strip()]
+DELETE_CATEGORIES = [c.strip() for c in os.getenv("QBT_DELETE_CATEGORIES", "").split(",") if c.strip()]
+DEFAULT_METHOD = ManageMethod.from_str(os.getenv("QBT_DEFAULT_METHOD", "ignore"))
 
 
 # Get gluetun's forwarded port, 0 is down.
@@ -69,6 +71,25 @@ def make_client():
     client = qbittorrentapi.Client(host=URL, port=PORT, api_key=API_TOKEN)
     client.auth_log_in()
     return client
+
+
+# Docker HEALTHCHECK: healthy only when qBittorrent's API accepts our API key.
+def healthcheck():
+    if not HAS_API_TOKEN:
+        raise SystemExit("QBT_API_TOKEN is not set")
+    base = URL.rstrip("/")
+    if "://" not in base:
+        base = f"http://{base}"
+    request = urllib.request.Request(f"{base}:{PORT}/api/v2/app/version")
+    request.add_header("Authorization", f"Bearer {API_TOKEN}")
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            print(f"qBittorrent {response.read().decode().strip()}")
+    except urllib.error.HTTPError as e:
+        hint = " (check QBT_API_TOKEN)" if e.code in (401, 403) else ""
+        raise SystemExit(f"qBittorrent API returned HTTP {e.code}{hint}")
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise SystemExit(f"qBittorrent API unreachable: {e}")
 
 
 def sync_port(client, forwarded_port, state):
@@ -126,7 +147,7 @@ def cleanup_torrents(client):
     print(f"Checking {len(torrents)} torrent(s) for ratio > {MAX_RATIO}.")
 
     for torrent in torrents:
-        method = ManageMethod.IGNORE
+        method = DEFAULT_METHOD
 
         if torrent.category:
             if torrent.category in DELETE_CATEGORIES:
@@ -167,6 +188,12 @@ def cleanup_torrents(client):
 
 
 def main():
+    # Logging in without a key would get us banned by qBittorrent, so wait to be restarted with one.
+    if not HAS_API_TOKEN:
+        print("QBT_API_TOKEN is not set. Create an API key in qBittorrent, set it, and restart qbtman.")
+        while True:
+            time.sleep(3600)
+
     state = {"firewalled_count": 0, "last_rebind": float("-inf")}
     client = None
     loop = 0

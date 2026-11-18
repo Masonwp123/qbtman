@@ -27,4 +27,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 USER nobody
 
+# Healthy only when qBittorrent's /api/v2/app/version accepts QBT_API_TOKEN
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --start-interval=5s --retries=3 \
+    CMD ["qbtman-healthcheck"]
+
 ENTRYPOINT ["qbtman"]

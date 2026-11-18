@@ -80,6 +80,7 @@ services:
       - ./docker/config:/config
       - ./docker/downloads:/downloads
 
+  # qbtman's image healthcheck also covers qBittorrent: it passes only when qBittorrent accepts QBT_API_TOKEN
   qbtman:
     image: ghcr.io/masonwp123/qbtman:latest
     container_name: qbtman
@@ -111,6 +112,8 @@ services:
       QBT_CLEANUP_EVERY: 0
       # What ratio to stop/remove/delete torrents at (please be generous)
       QBT_MAX_RATIO: 2.0
+      # Default method for all categories
+      QBT_DEFAULT_METHOD: "ignore"
       # Which categories should have their torrents stopped
       QBT_STOP_CATEGORIES: "stop0,stop1"
       # Which categories should have their torrents removed (overrides stopped)
@@ -191,11 +194,15 @@ docker logs qbittorrent   # the linuxserver image prints a temporary WebUI passw
 
 You don't need to set qBittorrent's listening port, network interface or UPnP options. qbtman manages them.
 
+qBittorrent doesn't need the token and has no healthcheck of its own. If qbtman is already running without a valid `QBT_API_TOKEN`, it shows as `unhealthy`, which is expected during setup. With no token set, it logs that the token is missing and waits without trying to log in, because repeated failed logins get it banned by qBittorrent.
+
 ### 6. Start qbtman
 
 ```
 docker compose up -d
 ```
+
+This starts qbtman with the new token, or recreates it if it was already running. It turns `healthy` once qBittorrent accepts the key.
 
 ## Usage
 
@@ -211,6 +218,8 @@ A healthy start looks like this:
 Applying forwarded port 46464 on tun0 (was 6881 on any interface).
 Port 46464 OK (status: connected).
 ```
+
+`docker ps` should show gluetun and qbtman as `(healthy)`. qBittorrent has no healthcheck of its own. qbtman's healthcheck calls qBittorrent's `/api/v2/app/version` with `QBT_API_TOKEN`, so it passes only when qBittorrent is up and the key is valid.
 
 From then on there is one line per check, every `QBT_CHECK_INTERVAL` seconds. gluetun logs its own side with `docker logs gluetun`. Look for `port forwarded is …`.
 
@@ -285,9 +294,22 @@ The category names in `docker-compose.yaml` (`stop0`, `remove0`, …) are placeh
 
 | qbtman log message | Cause |
 |---|---|
-| `Login failed` / `qBittorrent API error` | `QBT_API_TOKEN` is missing or wrong, or qBittorrent is older than 5.2. |
+| `QBT_API_TOKEN is not set` | Expected during setup. Set the key and recreate the container with `docker compose up -d`. |
+| `Login failed` / `qBittorrent API error` | `QBT_API_TOKEN` is wrong, or qBittorrent is older than 5.2. |
 | `qBittorrent unreachable` | qBittorrent is still starting, or `QBT_PORT` doesn't match `WEBUI_PORT`. |
 | `gluetun control server returned HTTP 401 (check GLUETUN_API_KEY)` | The key differs between the gluetun and qbtman services. |
 | `gluetun control server unreachable` | gluetun was restarted. Run `docker compose restart qbittorrent qbtman`. |
 | `Waiting for gluetun to forward a port.` (keeps repeating) | Check `docker logs gluetun`. The usual causes are a WireGuard config generated without NAT-PMP, or (in custom mode) a server that isn't P2P. |
 | Port changes every minute or two | gluetun isn't on `v3.41.3`. See [gluetun version](#gluetun-version). |
+
+If qbtman shows as `unhealthy`, its latest healthcheck output says why:
+
+```
+docker inspect --format '{{json .State.Health.Log}}' qbtman
+```
+
+| Healthcheck output | Cause |
+|---|---|
+| `QBT_API_TOKEN is not set` | The token is empty or still the `.env.example` placeholder. Set it and run `docker compose up -d`. |
+| `HTTP 403 (check QBT_API_TOKEN)` | `QBT_API_TOKEN` is wrong. After fixing `.env`, run `docker compose up -d` so qbtman picks it up. |
+| `qBittorrent API unreachable` | qBittorrent isn't running or isn't listening yet, or `WEBUI_PORT` and `QBT_PORT` don't match. |

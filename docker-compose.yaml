@@ -59,6 +59,7 @@ services:
       - ./docker/config:/config
       - ./docker/downloads:/downloads
 
+  # qbtman's image healthcheck also covers qBittorrent: it passes only when qBittorrent accepts QBT_API_TOKEN
   qbtman:
     image: ghcr.io/masonwp123/qbtman:latest
     container_name: qbtman
@@ -90,6 +91,8 @@ services:
       QBT_CLEANUP_EVERY: 0
       # What ratio to stop/remove/delete torrents at (please be generous)
       QBT_MAX_RATIO: 2.0
+      # Default method for all categories
+      QBT_DEFAULT_METHOD: "ignore"
       # Which categories should have their torrents stopped
       QBT_STOP_CATEGORIES: "stop0,stop1"
       # Which categories should have their torrents removed (overrides stopped)
