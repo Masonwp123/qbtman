@@ -93,6 +93,8 @@ services:
       QBT_MAX_RATIO: 2.0
       # Default method for all categories
       QBT_DEFAULT_METHOD: "ignore"
+      # Which categories should be explicitly stopped
+      QBT_IGNORE_CATEGORIES: "ignore0,ignore1"
       # Which categories should have their torrents stopped
       QBT_STOP_CATEGORIES: "stop0,stop1"
       # Which categories should have their torrents removed (overrides stopped)

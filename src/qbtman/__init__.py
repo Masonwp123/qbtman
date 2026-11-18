@@ -42,6 +42,7 @@ class ManageMethod(Enum):
         return ManageMethod.IGNORE
 
 NO_CATEGORY_METHOD = ManageMethod.from_str(os.getenv("QBT_NO_CATEGORY_METHOD", "ignore"))
+IGNORE_CATEGORIES = [c.strip() for c in os.getenv("QBT_IGNORE_CATEGORIES", "").split(",") if c.strip()]
 STOP_CATEGORIES = [c.strip() for c in os.getenv("QBT_STOP_CATEGORIES", "").split(",") if c.strip()]
 REMOVE_CATEGORIES = [c.strip() for c in os.getenv("QBT_REMOVE_CATEGORIES", "").split(",") if c.strip()]
 DELETE_CATEGORIES = [c.strip() for c in os.getenv("QBT_DELETE_CATEGORIES", "").split(",") if c.strip()]
@@ -150,7 +151,9 @@ def cleanup_torrents(client):
         method = DEFAULT_METHOD
 
         if torrent.category:
-            if torrent.category in DELETE_CATEGORIES:
+            if torrent.category in IGNORE_CATEGORIES:
+                method = ManageMethod.IGNORE
+            elif torrent.category in DELETE_CATEGORIES:
                 method = ManageMethod.DELETE
             elif torrent.category in REMOVE_CATEGORIES:
                 method = ManageMethod.REMOVE
